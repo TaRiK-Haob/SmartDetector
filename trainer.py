@@ -135,8 +135,8 @@ def word2vec_train(data_path):
         total_iat_loss = 0
         
         for batch_idx, batch in enumerate(dataloader):
-            batch.to(device)  # 确保数据在GPU上
             try:
+                batch = {key: value.to(device) for key, value in batch.items()}
                 # 训练pkt_len CBOW
                 pkt_len_optimizer.zero_grad()
                 pkt_len_output = pkt_len_embeddings(batch['pkt_len_context'])
