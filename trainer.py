@@ -49,13 +49,66 @@ class Word2VecDataset(torch.utils.data.Dataset):
         return self.samples[idx]
 
 
+def _load_data_from_jsonl(data_path):
+    """从JSONL文件加载数据"""
+    pkt_len_seqs = []
+    pkt_dir_seqs = []
+    iat_seqs = []
+    
+    with open(data_path, 'r') as f:
+        for line in f:
+            data = json.loads(line.strip())
+            if len(data['payload_len_seq']) <= 4:
+                continue
+            # TODO: 根据实际数据格式解析
+            if len(data['payload_len_seq']) < 40:
+                padding_len = 40 - len(data['payload_len_seq'])
+                data['payload_len_seq'] += [0] * padding_len
+                data['payload_ts_seq'] += [0] * padding_len
+
+            # 处理packet len序列 - 确保是整数且在词汇表范围内
+            pkt_len_seq = data['payload_len_seq'][:40]
+            # 限制在0-1499范围内，超出范围的值映射到1499
+            pkt_len_processed = []
+            for d in pkt_len_seq:
+                val = int(abs(d))
+                if val >= 1500:  # 如果超出词汇表大小
+                    val = 1499   # 映射到最大值
+                pkt_len_processed.append(val)
+            pkt_len_seqs.append(pkt_len_processed)
+            
+            pkt_dir_seqs.append([1 if d > 0 else -1 for d in pkt_len_seq])
+
+            # 处理间隔时间序列 - 确保是整数且在词汇表范围内
+            tss = data['payload_ts_seq'][:40]
+            iat_seq = [0]
+            for i in range(1, len(tss)):
+                iat = tss[i] - tss[i - 1]
+                if iat < 0:
+                    iat = 0
+                iat = round(float(iat), 4)
+                if iat >= 10000:  # 如果超出词汇表大小
+                    iat = 9999    # 映射到最大值
+                iat_seq.append(iat)
+            iat_seqs.append(iat_seq)
+    
+    # 添加数据验证
+    print(f"数据加载完成:")
+    print(f"pkt_len 范围: {min(min(seq) for seq in pkt_len_seqs)} - {max(max(seq) for seq in pkt_len_seqs)}")
+    print(f"iat 范围: {min(min(seq) for seq in iat_seqs)} - {max(max(seq) for seq in iat_seqs)}")
+    print(f"总共 {len(pkt_len_seqs)} 个序列")
+            
+    return pkt_len_seqs, pkt_dir_seqs, iat_seqs
+
 def word2vec_train(data_path):
-    # TODO: 从data_path加载数据
     pkt_len_seqs, pkt_dir_seqs, iat_seqs = _load_data_from_jsonl(data_path)
 
-    # 创建三个独立的CBOW模型
-    pkt_len_embeddings = models.CBOW(1500, 100)
-    iat_embeddings = models.CBOW(1000, 100)
+    # 创建三个独立的CBOW模型，确保vocab_size足够大
+    PKT_LEN_VOCAB_SIZE = 1500  # 包长度词汇表大小
+    IAT_VOCAB_SIZE = 10000      # 间隔时间词汇表大小
+    
+    pkt_len_embeddings = models.CBOW(PKT_LEN_VOCAB_SIZE, 100)
+    iat_embeddings = models.CBOW(IAT_VOCAB_SIZE, 100)
     
     # 创建三个独立的优化器
     pkt_len_optimizer = torch.optim.Adam(pkt_len_embeddings.parameters(), lr=0.001)
@@ -74,22 +127,32 @@ def word2vec_train(data_path):
         total_pkt_len_loss = 0
         total_iat_loss = 0
         
-        for batch in dataloader:
-            # 训练pkt_len CBOW
-            pkt_len_optimizer.zero_grad()
-            pkt_len_output = pkt_len_embeddings(batch['pkt_len_context'])
-            pkt_len_loss = criterion(pkt_len_output, batch['pkt_len_target'])
-            pkt_len_loss.backward()
-            pkt_len_optimizer.step()
-            total_pkt_len_loss += pkt_len_loss.item()
+        for batch_idx, batch in enumerate(dataloader):
+            try:
+                # 训练pkt_len CBOW
+                pkt_len_optimizer.zero_grad()
+                pkt_len_output = pkt_len_embeddings(batch['pkt_len_context'])
+                pkt_len_loss = criterion(pkt_len_output, batch['pkt_len_target'])
+                pkt_len_loss.backward()
+                pkt_len_optimizer.step()
+                total_pkt_len_loss += pkt_len_loss.item()
 
-            # 训练iat CBOW
-            iat_optimizer.zero_grad()
-            iat_output = iat_embeddings(batch['iat_context'])
-            iat_loss = criterion(iat_output, batch['iat_target'])
-            iat_loss.backward()
-            iat_optimizer.step()
-            total_iat_loss += iat_loss.item()
+                # 训练iat CBOW
+                iat_optimizer.zero_grad()
+                iat_output = iat_embeddings(batch['iat_context'])
+                iat_loss = criterion(iat_output, batch['iat_target'])
+                iat_loss.backward()
+                iat_optimizer.step()
+                total_iat_loss += iat_loss.item()
+                
+            except Exception as e:
+                print(f"Error in batch {batch_idx}: {e}")
+                print(f"PKT_LEN context shape: {batch['pkt_len_context'].shape}")
+                print(f"PKT_LEN context range: {batch['pkt_len_context'].min()} - {batch['pkt_len_context'].max()}")
+                print(f"PKT_LEN target range: {batch['pkt_len_target'].min()} - {batch['pkt_len_target'].max()}")
+                print(f"IAT context range: {batch['iat_context'].min()} - {batch['iat_context'].max()}")
+                print(f"IAT target range: {batch['iat_target'].min()} - {batch['iat_target'].max()}")
+                raise e
         
         print(f"Epoch {epoch+1}/{epochs}")
         print(f"PKT_LEN Loss: {total_pkt_len_loss/len(dataloader):.4f}")
@@ -105,40 +168,5 @@ def word2vec_train(data_path):
     return pkt_len_embeddings, iat_embeddings
 
 
-def _load_data_from_jsonl(data_path):
-    """从JSONL文件加载数据"""
-    pkt_len_seqs = []
-    pkt_dir_seqs = []
-    iat_seqs = []
-    
-    with open(data_path, 'r') as f:
-        for line in f:
-            data = json.loads(line.strip())
-            if len(data['payload_len_seq']) <= 4:
-                continue
-            # TODO: 根据实际数据格式解析
-            if len(data['payload_len_seq']) < 40:
-                padding_len = 40 - len(data['payload_len_seq'])
-                data['payload_len_seq'] += [0] * padding_len
-                data['payload_ts_seq'] += [0] * padding_len
-
-            # 处理packet len序列 - 确保是整数
-            pkt_len_seq = data['payload_len_seq'][:40]
-            pkt_len_seqs.append([int(abs(d)) for d in pkt_len_seq])  # 转换为整数
-            pkt_dir_seqs.append([1 if d > 0 else -1 for d in pkt_len_seq])
-
-            # 处理间隔时间序列 - 确保是整数
-            tss = data['payload_ts_seq'][:40]
-            iat_seq = [0]
-            for i in range(1, len(tss)):
-                iat = tss[i] - tss[i - 1]
-                if iat < 0:
-                    iat = 0
-                iat_seq.append(int(iat))  # 转换为整数
-            iat_seqs.append(iat_seq)
-            
-    return pkt_len_seqs, pkt_dir_seqs, iat_seqs
-
-
 if __name__ == "__main__":
-    pkt_len_embeddings, iat_embeddings = word2vec_train('test.jsonl')  # 替换为实际数据路径
+    pkt_len_embeddings, iat_embeddings = word2vec_train('data/test.jsonl')  # 替换为实际数据路径

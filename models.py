@@ -144,9 +144,9 @@ def resnet50(num_classes=1000):
 
 
 class SmartDetector(torch.nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, sam):
         super(SmartDetector, self).__init__()
-        self.feature_embedding = FeatureEmbedding(input_dim, output_dim)
+        self.feature_embedding = sam
         
         self.encoder = resnet50(num_classes=output_dim)
 
