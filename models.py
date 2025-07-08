@@ -43,23 +43,29 @@ class SAM(torch.nn.Module):
         
         return pkt_dir_embeds
         
-    def forward(self, pkt_len_seq, pkt_dir_seq, iat_seq):
+    def forward(self, x):
         """
-        输入：
-        - pkt_len_seq: [batch_size, seq_len] 包长度序列
-        - pkt_dir_seq: [batch_size, seq_len] 包方向序列 (值为1或-1)
-        - iat_seq: [batch_size, seq_len] 间隔时间序列
-        输出：
-        - pkt_len_embeds: [batch_size, seq_len, embedding_dim] 包长度嵌入向量
-        - pkt_dir_embeds: [batch_size, seq_len, embedding_dim] 包方向嵌入向量
-        - iat_embeds: [batch_size, seq_len, embedding_dim] 间隔时间序列
+        - 输入：
+        x -> [batch_size, 3, seq_len] 包长度、包方向和间隔时间序列
+        - 输出：
+        x -> [batch_size, 3, seq_len, embedding_dim] 
+            - 相当于 resnet的输入格式（channels, height, width）
         """
+        # 分离输入序列
+        pkt_len_seq = x[:, 0, :]  # [batch_size, seq_len]
+        pkt_dir_seq = x[:, 1, :]  # [batch_size, seq_len]
+        iat_seq = x[:, 2, :]      # [batch_size, seq_len]
+
         # 获取嵌入向量
         pkt_len_embeds = self.pkt_len_embeddings(pkt_len_seq)  # [batch_size, seq_len, embedding_dim]
         pkt_dir_embeds = self._get_pkt_dir_embeds(pkt_dir_seq)  # [batch_size, seq_len, embedding_dim]
         iat_embeds = self.iat_embeddings(iat_seq)              # [batch_size, seq_len, embedding_dim]
+
+        # 拼接嵌入向量
+        x = torch.stack([pkt_len_embeds, pkt_dir_embeds, iat_embeds], dim=1)
+        # x -> [batch_size, 3, seq_len, embedding_dim]
         
-        return pkt_len_embeds, pkt_dir_embeds, iat_embeds
+        return x
     
 
 class BasicBlock(torch.nn.Module):

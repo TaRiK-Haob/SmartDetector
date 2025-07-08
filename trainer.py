@@ -100,6 +100,7 @@ def _load_data_from_jsonl(data_path):
             
     return pkt_len_seqs, pkt_dir_seqs, iat_seqs
 
+
 def word2vec_train(data_path):
     pkt_len_seqs, pkt_dir_seqs, iat_seqs = _load_data_from_jsonl(data_path)
 
@@ -119,6 +120,7 @@ def word2vec_train(data_path):
     
     # 创建数据集和数据加载器
     dataset = Word2VecDataset(pkt_len_seqs, pkt_dir_seqs, iat_seqs)
+    print(f"数据集大小: {len(dataset)}")
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
     
     # 训练循环
@@ -166,6 +168,72 @@ def word2vec_train(data_path):
     }, 'word2vec_embeddings.pth')
     
     return pkt_len_embeddings, iat_embeddings
+
+
+def _augmentation(pkt_len_seq, pkt_dir_seq, iat_seq):
+    aug_len_seq = []
+    aug_dir_seq = []
+    aug_iat_seq = []
+    
+    for i in range(0,len(pkt_len_seq)):
+        q = random.uniform(0, 1)
+        if q <= 0.5:
+            #生成包
+            z = random.randint(0, 1500)
+            a = random.uniform(0, 0.2)
+            d = random.choice([-1, 1])
+
+            # Insert the augmented packet
+            aug_len_seq.append(d)
+            aug_dir_seq.append(z)
+            aug_iat_seq.append(a)
+
+        r = random.uniform(0, 1)
+        if r <= 0.5:
+            theta = random.uniform(0, 0.2)
+            iat_seq[i] += theta
+            
+        # Insert the original packet i
+        aug_len_seq.append(pkt_len_seq[i])
+        aug_dir_seq.append(pkt_dir_seq[i])
+        aug_iat_seq.append(iat_seq[i])
+
+    aug_len_seq = torch.tensor(aug_len_seq, dtype=torch.float32)
+    aug_dir_seq = torch.tensor(aug_dir_seq, dtype=torch.float32)
+    aug_iat_seq = torch.tensor(aug_iat_seq, dtype=torch.float32)
+
+    return aug_len_seq, aug_dir_seq, aug_iat_seq
+
+
+class ContrastiveDataset(torch.utils.data.Dataset):
+    def __init__(self, pkt_len_seqs, pkt_dir_seqs, iat_seqs):
+        self.pkt_len_seqs = pkt_len_seqs
+        self.pkt_dir_seqs = pkt_dir_seqs
+        self.iat_seqs = iat_seqs
+    
+    def __len__(self):
+        return len(self.pkt_len_seqs)
+    
+    def __getitem__(self, idx):
+        pkt_len_seq = self.pkt_len_seqs[idx]
+        pkt_dir_seq = self.pkt_dir_seqs[idx]
+        iat_seq = self.iat_seqs[idx]
+
+        # 生成增强视图
+        aug_pkt_len_seq, aug_pkt_dir_seq, aug_iat_seq = _augmentation(pkt_len_seq, pkt_dir_seq, iat_seq)
+        view1 = torch.stack([aug_pkt_len_seq, aug_pkt_dir_seq, aug_iat_seq], dim=0)  # [3, seq_len]
+
+        aug_pkt_len_seq, aug_pkt_dir_seq, aug_iat_seq = _augmentation(pkt_len_seq, pkt_dir_seq, iat_seq)
+        view2 = torch.stack([aug_pkt_len_seq, aug_pkt_dir_seq, aug_iat_seq], dim=0)  # [3, seq_len]
+
+        return view1, view2
+
+
+def smart_detector_train(sam, data_path='data/test.jsonl'):
+    pkt_len_seqs, pkt_dir_seqs, iat_seqs = _load_data_from_jsonl(data_path)
+    dataset = ContrastiveDataset(pkt_len_seqs, pkt_dir_seqs, iat_seqs)
+
+    smart_detector = models.SmartDetector(input_dim=100, output_dim=2, sam=sam)
 
 
 if __name__ == "__main__":
