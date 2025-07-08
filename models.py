@@ -4,16 +4,63 @@ import torch
 # B -> dimension of embeddings
 K, B = 40, 100
 
-class FeatureEmbedding(torch.nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(FeatureEmbedding, self).__init__()
-        self.direction_embedding = torch.nn.Linear(input_dim, output_dim)
-        self.pktlen_embedding = torch.nn.Linear(input_dim, output_dim)
-        self.IAT_embedding = torch.nn.Linear(input_dim, output_dim)
 
-    def forward(self, x):
-        pass
+class CBOW(torch.nn.Module):
+    def __init__(self, vocab_size, embedding_dim):
+        super(CBOW, self).__init__()
+        self.embeddings = torch.nn.Embedding(vocab_size, embedding_dim)
+        self.linear = torch.nn.Linear(embedding_dim, vocab_size)
 
+    def forward(self, context):
+        embeds = self.embeddings(context)
+        embeds = torch.mean(embeds, dim=1)  # 使用mean而不是sum
+        out = self.linear(embeds)  # 使用embeds而不是out
+        return out
+
+
+class SAM(torch.nn.Module):
+    def __init__(self, pkt_len_model, iat_model):
+        super(SAM, self).__init__()
+        # 使用训练好的CBOW模型的嵌入层
+        self.pkt_len_embeddings = pkt_len_model.embeddings
+        self.iat_embeddings = iat_model.embeddings
+        
+        # 冻结嵌入层权重（可选）
+        self.pkt_len_embeddings.weight.requires_grad = False
+        self.iat_embeddings.weight.requires_grad = False
+
+    def _get_pkt_dir_embeds(self, pkt_dir_seq):
+        """
+        直接根据pkt_dir_seq的值生成嵌入向量
+        输入: pkt_dir_seq [batch_size, seq_len] 值为1或-1
+        输出: [batch_size, seq_len, embedding_dim]
+        """
+        batch_size, seq_len = pkt_dir_seq.shape
+        
+        # 创建与pkt_dir_seq相同形状的嵌入矩阵
+        pkt_dir_embeds = pkt_dir_seq.unsqueeze(-1).float()  # [batch_size, seq_len, 1]
+        pkt_dir_embeds = pkt_dir_embeds.expand(batch_size, seq_len, 100)  # [batch_size, seq_len, embedding_dim]
+        
+        return pkt_dir_embeds
+        
+    def forward(self, pkt_len_seq, pkt_dir_seq, iat_seq):
+        """
+        输入：
+        - pkt_len_seq: [batch_size, seq_len] 包长度序列
+        - pkt_dir_seq: [batch_size, seq_len] 包方向序列 (值为1或-1)
+        - iat_seq: [batch_size, seq_len] 间隔时间序列
+        输出：
+        - pkt_len_embeds: [batch_size, seq_len, embedding_dim] 包长度嵌入向量
+        - pkt_dir_embeds: [batch_size, seq_len, embedding_dim] 包方向嵌入向量
+        - iat_embeds: [batch_size, seq_len, embedding_dim] 间隔时间序列
+        """
+        # 获取嵌入向量
+        pkt_len_embeds = self.pkt_len_embeddings(pkt_len_seq)  # [batch_size, seq_len, embedding_dim]
+        pkt_dir_embeds = self._get_pkt_dir_embeds(pkt_dir_seq)  # [batch_size, seq_len, embedding_dim]
+        iat_embeds = self.iat_embeddings(iat_seq)              # [batch_size, seq_len, embedding_dim]
+        
+        return pkt_len_embeds, pkt_dir_embeds, iat_embeds
+    
 
 class BasicBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
