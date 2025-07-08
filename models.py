@@ -88,25 +88,88 @@ class ResNet(torch.nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
-        
+
         return x
     
     
 def resnet50(num_classes=1000):
     return ResNet(BasicBlock, [3, 4, 6, 3], num_classes)
 
+
 class SmartDetector(torch.nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SmartDetector, self).__init__()
         self.feature_embedding = FeatureEmbedding(input_dim, output_dim)
-        self.fc1 = torch.nn.Linear(output_dim * 3, 128)
-        self.fc2 = torch.nn.Linear(128, 64)
-        self.fc3 = torch.nn.Linear(64, 1)
+        
+        self.encoder = resnet50(num_classes=output_dim)
 
-    def forward(self, x):
-        embedded_features = self.feature_embedding(x)
-        x = torch.cat(embedded_features, dim=1)
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = torch.sigmoid(self.fc3(x))
-        return x
+        # TODO: fix the size of projection_head
+        self.projection_head = torch.nn.Sequential(
+            torch.nn.Linear(self.hidden_size * 3, self.hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.hidden_size, self.projection_dim)
+        )
+
+        self.loss_fn = ContrastiveLoss(temperature=0.1)
+
+    def forward(self, x1, x2):
+        x1 = self.feature_embedding(x1)
+        x2 = self.feature_embedding(x2)
+
+        x1 = self.encoder(x1)
+        x2 = self.encoder(x2)
+
+        x1 = torch.flatten(x1, 1)
+        x2 = torch.flatten(x2, 1)
+
+        p1 = self.projection_head(x1)
+        p2 = self.projection_head(x2)
+
+        loss = self.loss_fn(p1, p2)
+        
+        return loss
+    
+
+class ContrastiveLoss(torch.nn.Module):
+    def __init__(self, temperature=0.1):
+        super(ContrastiveLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, z_i, z_j):
+        """
+        z_i, z_j: 两个增强视图的表示 [batch_size, projection_dim]
+        """
+        batch_size = z_i.shape[0]
+
+        # 计算相似度矩阵
+        representations = torch.cat([z_i, z_j], dim=0)  # [2*batch_size, projection_dim]
+        representations = torch.functional.normalize(representations, dim=1)  # 归一化
+        similarity_matrix = torch.matmul(representations, representations.T)  # [2*batch_size, 2*batch_size]
+        
+        # 应用温度参数
+        similarity_matrix = similarity_matrix / self.temperature
+        
+        # 创建标签：对角线上的正样本对
+        labels = torch.cat([torch.arange(batch_size) for _ in range(2)], dim=0)
+        labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+        labels = labels.to(similarity_matrix.device)
+        
+        # 移除对角线（自身相似度）
+        mask = torch.eye(labels.shape[0], dtype=torch.bool).to(similarity_matrix.device)
+        labels = labels[~mask].view(labels.shape[0], -1)
+        similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+        
+        # 计算正样本的相似度
+        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+        
+        # 计算负样本的相似度
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+        
+        # InfoNCE损失
+        logits = torch.cat([positives, negatives], dim=1)
+        labels = torch.zeros(logits.shape[0], dtype=torch.long).to(logits.device)
+        
+        loss = torch.functional.cross_entropy(logits, labels)
+        return loss
+    
+
