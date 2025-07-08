@@ -110,6 +110,11 @@ def word2vec_train(data_path):
     
     pkt_len_embeddings = models.CBOW(PKT_LEN_VOCAB_SIZE, 100)
     iat_embeddings = models.CBOW(IAT_VOCAB_SIZE, 100)
+
+    # 将模型移动到GPU（如果可用）
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    pkt_len_embeddings.to(device)
+    iat_embeddings.to(device)
     
     # 创建三个独立的优化器
     pkt_len_optimizer = torch.optim.Adam(pkt_len_embeddings.parameters(), lr=0.001)
@@ -130,6 +135,7 @@ def word2vec_train(data_path):
         total_iat_loss = 0
         
         for batch_idx, batch in enumerate(dataloader):
+            batch.to(device)  # 确保数据在GPU上
             try:
                 # 训练pkt_len CBOW
                 pkt_len_optimizer.zero_grad()
@@ -146,7 +152,6 @@ def word2vec_train(data_path):
                 iat_loss.backward()
                 iat_optimizer.step()
                 total_iat_loss += iat_loss.item()
-                
             except Exception as e:
                 print(f"Error in batch {batch_idx}: {e}")
                 print(f"PKT_LEN context shape: {batch['pkt_len_context'].shape}")
