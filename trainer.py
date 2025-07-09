@@ -60,7 +60,7 @@ def _load_data_from_jsonl(data_path):
             data = json.loads(line.strip())
             if len(data['payload_len_seq']) <= 4:
                 continue
-            # TODO: 根据实际数据格式解析
+
             if len(data['payload_len_seq']) < 40:
                 padding_len = 40 - len(data['payload_len_seq'])
                 data['payload_len_seq'] += [0] * padding_len
@@ -86,12 +86,13 @@ def _load_data_from_jsonl(data_path):
                 iat = tss[i] - tss[i - 1]
                 if iat < 0:
                     iat = 0
-                iat = round(float(iat), 4)
+                iat = int(iat * 1000)
                 if iat >= 10000:  # 如果超出词汇表大小
                     iat = 9999    # 映射到最大值
                 iat_seq.append(iat)
-            iat_seqs.append(iat_seq)
-    
+            iat_seqs.append(iat_seq)   
+    # print(len(pkt_len_seqs), len(pkt_dir_seqs), len(iat_seqs))
+
     # 添加数据验证
     print(f"数据加载完成:")
     print(f"pkt_len 范围: {min(min(seq) for seq in pkt_len_seqs)} - {max(max(seq) for seq in pkt_len_seqs)}")
@@ -166,13 +167,10 @@ def word2vec_train(data_path):
         print(f"IAT Loss: {total_iat_loss/len(dataloader):.4f}")
         print("-" * 50)
     
-    # 保存训练好的嵌入模型
-    torch.save({
-        'pkt_len_embeddings': pkt_len_embeddings.state_dict(),
-        'iat_embeddings': iat_embeddings.state_dict()
-    }, 'word2vec_embeddings.pth')
-    
-    return pkt_len_embeddings, iat_embeddings
+    sam = models.SAM(pkt_len_embeddings, iat_embeddings)  # 确保SAM模型可以使用这两个嵌入模型
+    torch.save(sam.state_dict(), 'model_params/sam.pth')  # 保存SAM模型参数
+
+    return sam
 
 
 def _augmentation(pkt_len_seq, pkt_dir_seq, iat_seq):
@@ -184,28 +182,29 @@ def _augmentation(pkt_len_seq, pkt_dir_seq, iat_seq):
         q = random.uniform(0, 1)
         if q <= 0.5:
             #生成包
-            z = random.randint(0, 1500)
+            z = random.randint(0, 1499)
             a = random.uniform(0, 0.2)
             d = random.choice([-1, 1])
 
             # Insert the augmented packet
-            aug_len_seq.append(d)
-            aug_dir_seq.append(z)
-            aug_iat_seq.append(a)
+            aug_len_seq.append(z)
+            aug_dir_seq.append(d)
+            aug_iat_seq.append(a * 1000)
 
         r = random.uniform(0, 1)
         if r <= 0.5:
-            theta = random.uniform(0, 0.2)
-            iat_seq[i] += theta
+            theta = random.uniform(0, 0.2) * 1000
+            iat_seq[i] += int(theta)
+            iat_seq[i] = min(iat_seq[i], 9999)  # 限制在0-9999范围内
             
         # Insert the original packet i
         aug_len_seq.append(pkt_len_seq[i])
         aug_dir_seq.append(pkt_dir_seq[i])
         aug_iat_seq.append(iat_seq[i])
 
-    aug_len_seq = torch.tensor(aug_len_seq, dtype=torch.float32)
-    aug_dir_seq = torch.tensor(aug_dir_seq, dtype=torch.float32)
-    aug_iat_seq = torch.tensor(aug_iat_seq, dtype=torch.float32)
+    aug_len_seq = torch.tensor(aug_len_seq[:40], dtype=torch.long)
+    aug_dir_seq = torch.tensor(aug_dir_seq[:40], dtype=torch.long)
+    aug_iat_seq = torch.tensor(aug_iat_seq[:40], dtype=torch.long)
 
     return aug_len_seq, aug_dir_seq, aug_iat_seq
 
@@ -235,11 +234,45 @@ class ContrastiveDataset(torch.utils.data.Dataset):
 
 
 def smart_detector_train(sam, data_path='data/test.jsonl'):
+
     pkt_len_seqs, pkt_dir_seqs, iat_seqs = _load_data_from_jsonl(data_path)
     dataset = ContrastiveDataset(pkt_len_seqs, pkt_dir_seqs, iat_seqs)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+    print(f"对比学习数据集大小: {len(dataset)}")
 
-    smart_detector = models.SmartDetector(input_dim=100, output_dim=2, sam=sam)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    smart_detector = models.SmartDetector(sam=sam)
+    smart_detector.to(device)
+
+    optimizer = torch.optim.Adam(smart_detector.parameters(), lr=1e-4)
+
+    for epoch in range(10):
+        for batch in dataloader:
+            view1, view2 = batch
+            view1 = view1.to(device)
+            view2 = view2.to(device)
+            optimizer.zero_grad()
+
+            loss = smart_detector(view1, view2)
+
+            loss.backward()
+            optimizer.step()
+        print(f"Epoch {epoch + 1}/{10}, Loss: {loss.item():.4f}")
+
+    # 保存模型参数
+    torch.save({
+        'sam_state_dict': sam.state_dict(),
+        'smart_detector_state_dict': smart_detector.state_dict()
+    }, 'model_params/smart_detector.pth')
+
+    return smart_detector
 
 
 if __name__ == "__main__":
-    pkt_len_embeddings, iat_embeddings = word2vec_train('data/test.jsonl')  # 替换为实际数据路径
+    sam = word2vec_train('data/minitest.jsonl')  # 替换为实际数据路径
+
+    # 如果需要继续训练SmartDetector，可以取消下面的注释
+    # sam = models.SAM()  # 初始化SAM模型
+    # sam.load_state_dict(torch.load('model_params/sam.pth'))  # 加载训练好的SAM模型参数
+
+    smart_detector_train(sam, 'data/minitest.jsonl')  # 替换为实际数据路径
