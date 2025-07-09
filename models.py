@@ -5,6 +5,9 @@ import torchvision
 # B -> dimension of embeddings
 K, B = 40, 100
 
+# D -> dimension of deep representation
+D = 64
+
 
 class CBOW(torch.nn.Module):
     def __init__(self, vocab_size, embedding_dim):
@@ -20,15 +23,15 @@ class CBOW(torch.nn.Module):
 
 
 class SAM(torch.nn.Module):
-    def __init__(self, pkt_len_model, iat_model):
+    def __init__(self, pkt_len_model = CBOW(1500, 100), iat_model = CBOW(10000, 100)):
         super(SAM, self).__init__()
         # 使用训练好的CBOW模型的嵌入层
         self.pkt_len_embeddings = pkt_len_model.embeddings
         self.iat_embeddings = iat_model.embeddings
         
-        # 冻结嵌入层权重（可选）
-        self.pkt_len_embeddings.weight.requires_grad = False
-        self.iat_embeddings.weight.requires_grad = False
+        # # 冻结嵌入层权重（可选）
+        # self.pkt_len_embeddings.weight.requires_grad = False
+        # self.iat_embeddings.weight.requires_grad = False
 
     def _get_pkt_dir_embeds(self, pkt_dir_seq):
         """
@@ -78,11 +81,11 @@ def resnet50(out_dim=1000):
 
 
 class SmartDetector(torch.nn.Module):
-    def __init__(self, sam):
+    def __init__(self, sam = SAM()):
         super(SmartDetector, self).__init__()
         self.feature_embedding = sam
         
-        self.encoder = resnet50(64)
+        self.encoder = resnet50(D)
 
         # 投影头
         self.projection_head = torch.nn.Sequential(
@@ -154,3 +157,30 @@ class ContrastiveLoss(torch.nn.Module):
         return loss
 
 
+class Classifier(torch.nn.Module):
+    """
+    Classifier model that combines SAM and ResNet50 for feature extraction and classification.
+    - sam: SAM model for feature embedding
+    - encoder: ResNet50 encoder for feature extraction
+    """
+
+    def __init__(self, samrt_detector = SmartDetector(), num_classes=2):
+        super(Classifier, self).__init__()
+        self.feature_embedding = samrt_detector.feature_embedding
+        self.encoder = samrt_detector.encoder
+
+        # feature_embedding 和 encoder 不需要训练
+        for param in self.feature_embedding.parameters():
+            param.requires_grad = False
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        self.output = torch.nn.Linear(D, num_classes)
+
+
+    def forward(self, x):
+        x = self.feature_embedding(x)
+        x = self.encoder(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x

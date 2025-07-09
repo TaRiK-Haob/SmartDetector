@@ -259,20 +259,18 @@ def smart_detector_train(sam, data_path='data/test.jsonl'):
             optimizer.step()
         print(f"Epoch {epoch + 1}/{10}, Loss: {loss.item():.4f}")
 
-    # 保存模型参数
-    torch.save({
-        'sam_state_dict': sam.state_dict(),
-        'smart_detector_state_dict': smart_detector.state_dict()
-    }, 'model_params/smart_detector.pth')
+    # # 保存模型参数
+    # torch.save({
+    #     'sam_state_dict': sam.state_dict(),
+    #     'smart_detector_state_dict': smart_detector.state_dict()
+    # }, 'model_params/smart_detector.pth')
+
+    torch.save(smart_detector.state_dict(), 'model_params/smart_detector.pth')  # 保存SmartDetector模型参数
 
     return smart_detector
 
 
 if __name__ == "__main__":
     sam = word2vec_train('data/minitest.jsonl')  # 替换为实际数据路径
-
-    # 如果需要继续训练SmartDetector，可以取消下面的注释
-    # sam = models.SAM()  # 初始化SAM模型
-    # sam.load_state_dict(torch.load('model_params/sam.pth'))  # 加载训练好的SAM模型参数
 
     smart_detector_train(sam, 'data/minitest.jsonl')  # 替换为实际数据路径
