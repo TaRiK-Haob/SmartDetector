@@ -26,13 +26,26 @@ def main():
         sd = load_models()  # 加载SmartDetector模型
     else:
         print("Training SmartDetector model...")
-        sam = trainer.word2vec_train("data/sam_train.jsonl")    # 训练并创建语义属性矩阵SAM
-        sd = trainer.smart_detector_train(sam, "data/pre_train.jsonl")  # 训练SmartDetector模型
+        sd = trainer.smart_detector_train(
+            trainer.word2vec_train("data/minitest.jsonl"), # 训练并创建语义属性矩阵SAM (未来指定为sam_train.jsonl)
+            "data/minitest.jsonl"     # 训练SmartDetector模型(指定为pre_train.jsonl)
+        )
     
-    # 创建分类器模型
-    classifier = models.Classifier(sd, 2)
+    # 预训练分类模型
+    if os.path.exists('model_params/smart_detector.pth'):
+        print("Loading Classifier model from file...")
+        classifier = models.Classifier(sd, 2)
+        classifier.load_state_dict(torch.load('model_params/finetune.pth'))
+    else:
+        print("Pre-Training Classifier model...")
+        # 创建分类器模型
+        classifier = models.Classifier(sd, 2)
+        classifier = trainer.classifier_finetune(classifier, "data/classifier.jsonl")   # 训练下游任务Classifier模型(指定为classifier.jsonl)
 
-    # TODO: finetune for 下游分类任务
+
+    tester.test(classifier, "data/test.jsonl")  # 测试分类器模型
+
+
 
 
 if __name__ == "__main__":

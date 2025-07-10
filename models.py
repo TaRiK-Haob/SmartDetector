@@ -179,8 +179,11 @@ class Classifier(torch.nn.Module):
 
 
     def forward(self, x):
+        print(x.shape)
         x = self.feature_embedding(x)
         x = self.encoder(x)
         x = torch.flatten(x, 1)
         x = self.output(x)
         return x
+
+
