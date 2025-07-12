@@ -1,4 +1,4 @@
-import trainer
+import trainer, tester
 import models
 import torch
 import os

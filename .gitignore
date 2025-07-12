@@ -7,3 +7,4 @@ model_params/
 *.pth
 *.jsonl
 *.log
+*.txt
